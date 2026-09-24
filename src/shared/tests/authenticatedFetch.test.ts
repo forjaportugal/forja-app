@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test, vi } from 'vitest';
 
 import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT } from '@/shared/authToken';
+import type * as AuthTokenModule from '@/shared/authToken';
 
 /**
  * The consumer side of the JWT lifecycle that authToken.ts owns.
@@ -16,9 +17,19 @@ import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT } from '@/shared
  * workspace has VITE_IS_PLATFORM=true, CI does not.
  */
 
+// Forja: the token lives in authToken.ts memory (never in web storage), and
+// resetModules() gives every test a fresh copy, so the test seeds it there.
+let seededToken: string | null = null;
+let authModule: typeof AuthTokenModule | null = null;
+const storedToken = () => authModule?.getStoredAuthToken() ?? null;
+
 const loadFetch = async (isPlatform: boolean) => {
   vi.stubEnv('VITE_IS_PLATFORM', isPlatform ? 'true' : 'false');
   vi.resetModules();
+  authModule = await import('@/shared/authToken');
+  if (seededToken) {
+    authModule.storeAuthToken(seededToken);
+  }
   return (await import('@/shared/api')).authenticatedFetch;
 };
 
@@ -52,6 +63,8 @@ const sentHeaders = () => (lastInit?.headers ?? {}) as Record<string, string>;
 
 beforeEach(() => {
   localStorage.clear();
+  seededToken = null;
+  authModule = null;
   lastInit = undefined;
 });
 
@@ -62,7 +75,7 @@ afterEach(() => {
 
 test('a live token is sent as a bearer credential', async () => {
   const token = liveToken();
-  localStorage.setItem('auth-token', token);
+  seededToken = token;
   respondWith();
 
   await (await loadFetch(false))('/api/projects');
@@ -72,7 +85,7 @@ test('a live token is sent as a bearer credential', async () => {
 
 test('platform builds send no bearer token, because the session is a cookie', async () => {
   const token = liveToken();
-  localStorage.setItem('auth-token', token);
+  seededToken = token;
   respondWith();
 
   await (await loadFetch(true))('/api/projects');
@@ -83,7 +96,7 @@ test('platform builds send no bearer token, because the session is a cookie', as
 test('an expired token is never put on the wire', async () => {
   // getStoredAuthToken drops it rather than handing it over, so the request goes
   // out unauthenticated and the app is told the session is gone.
-  localStorage.setItem('auth-token', expiredToken());
+  seededToken = expiredToken();
   let expiries = 0;
   const onExpired = () => {
     expiries += 1;
@@ -95,7 +108,7 @@ test('an expired token is never put on the wire', async () => {
 
   window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   assert.equal('Authorization' in sentHeaders(), false);
-  assert.equal(localStorage.getItem('auth-token'), null);
+  assert.equal(storedToken(), null);
   assert.equal(expiries, 1);
 });
 
@@ -138,7 +151,7 @@ test('a caller header wins over the default', async () => {
 });
 
 test('a refreshed token on the response replaces the stored one', async () => {
-  localStorage.setItem('auth-token', liveToken());
+  seededToken = liveToken();
   const rotated = liveToken().replace('signature', 'rotated');
   let announced: string | null = null;
   const onRefresh = (event: Event) => {
@@ -150,12 +163,12 @@ test('a refreshed token on the response replaces the stored one', async () => {
   await (await loadFetch(false))('/api/projects');
 
   window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, onRefresh);
-  assert.equal(localStorage.getItem('auth-token'), rotated);
+  assert.equal(storedToken(), rotated);
   assert.equal(announced, rotated);
 });
 
 test('an auth error on the response ends the session', async () => {
-  localStorage.setItem('auth-token', liveToken());
+  seededToken = liveToken();
   let expiries = 0;
   const onExpired = () => {
     expiries += 1;
@@ -167,15 +180,15 @@ test('an auth error on the response ends the session', async () => {
 
   window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   assert.equal(expiries, 1);
-  assert.equal(localStorage.getItem('auth-token'), null);
+  assert.equal(storedToken(), null);
 });
 
 test('an ordinary response leaves the stored token alone', async () => {
   const token = liveToken();
-  localStorage.setItem('auth-token', token);
+  seededToken = token;
   respondWith();
 
   await (await loadFetch(false))('/api/projects');
 
-  assert.equal(localStorage.getItem('auth-token'), token);
+  assert.equal(storedToken(), token);
 });

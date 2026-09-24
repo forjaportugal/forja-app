@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 import { IS_PLATFORM } from '@/shared/utils';
 import { api } from '@/shared/api';
-import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, getAuthTokenRefreshDelay, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
+import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, clearAuthToken, getAuthTokenRefreshDelay, getStoredAuthToken, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
 import { hydrateChatDrafts, resetChatDrafts } from '@/shared/chatDrafts';
 import { hydrateUserPreferences, resetUserPreferences } from '@/shared/userSettings';
 /** The signed-in account held by AuthContext - a required `username` plus an optional id and any additional fields the auth API returns - and should be read through `useAuth()` rather than re-derived from raw auth responses. */
@@ -13,8 +13,6 @@ type AuthUser = {
   username: string;
   [key: string]: unknown;
 };
-
-const AUTH_TOKEN_STORAGE_KEY = 'auth-token';
 
 const AUTH_ERROR_MESSAGES = {
   authStatusCheckFailed: 'errors.authStatusCheckFailed',
@@ -35,6 +33,10 @@ type AuthSessionPayload = {
 
 type AuthStatusPayload = {
   needsSetup?: boolean;
+  // Forja PIN mode (Cloudflare Access identity + 6-digit PIN).
+  authMode?: 'pin' | 'password';
+  email?: string;
+  error?: string;
 };
 
 type AuthUserPayload = {
@@ -55,6 +57,10 @@ type AuthContextValue = {
   token: string | null;
   isLoading: boolean;
   needsSetup: boolean;
+  /** 'pin' when the server runs the Forja Cloudflare Access + PIN mode. */
+  authMode: 'pin' | 'password';
+  /** Cloudflare Access email in PIN mode. */
+  accessEmail: string | null;
   hasCompletedOnboarding: boolean;
   error: string | null;
   login: (username: string, password: string) => Promise<AuthActionResult>;
@@ -85,14 +91,14 @@ function resolveApiErrorMessage(payload: ApiErrorPayload | null, fallback: strin
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const readStoredToken = (): string | null => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+const readStoredToken = (): string | null => getStoredAuthToken();
 
 const persistToken = (token: string) => {
   storeAuthToken(token);
 };
 
 const clearStoredToken = () => {
-  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  clearAuthToken();
 };
 
 export function useAuth(): AuthContextValue {
@@ -111,6 +117,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [token, setToken] = useState<string | null>(() => readStoredToken());
   const [isLoading, setIsLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [authMode, setAuthMode] = useState<'pin' | 'password'>('password');
+  const [accessEmail, setAccessEmail] = useState<string | null>(null);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -212,6 +220,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       const statusResponse = await api.auth.status();
       const statusPayload = await parseJsonSafely<AuthStatusPayload>(statusResponse);
+      if (statusPayload?.authMode === 'pin') {
+        setAuthMode('pin');
+        setAccessEmail(statusPayload.email ?? null);
+      }
+      if (!statusResponse.ok && typeof statusPayload?.error === 'string') {
+        setError(statusPayload.error);
+      }
 
       if (statusPayload?.needsSetup) {
         setNeedsSetup(true);
@@ -357,6 +372,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       token,
       isLoading,
       needsSetup,
+      authMode,
+      accessEmail,
       hasCompletedOnboarding,
       error,
       login,
@@ -365,6 +382,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       refreshOnboardingStatus,
     }),
     [
+      accessEmail,
+      authMode,
       error,
       hasCompletedOnboarding,
       isLoading,

@@ -8,6 +8,27 @@
  */
 
 export const AUTH_TOKEN_REFRESHED_EVENT = 'auth-token-refreshed';
+
+// Forja: the session token lives only in this module's memory. It is never
+// written to localStorage or sessionStorage, so closing the app, reloading the
+// page or reopening the PWA always ends the session and the PIN is asked again.
+const LEGACY_STORAGE_KEY = 'auth-token';
+let memoryToken: string | null = null;
+
+const purgeLegacyToken = (): void => {
+  try {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    sessionStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable (private mode, tests); nothing to purge then.
+  }
+};
+purgeLegacyToken();
+
+export const clearAuthToken = (): void => {
+  memoryToken = null;
+  purgeLegacyToken();
+};
 export const AUTH_SESSION_EXPIRED_EVENT = 'auth-session-expired';
 
 // Only accept a refreshed token that has this app's issued JWT shape
@@ -72,14 +93,14 @@ export const getAuthTokenRefreshDelay = (token: unknown): number | null => {
 };
 
 export const expireAuthSession = (): void => {
-  localStorage.removeItem('auth-token');
+  clearAuthToken();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
   }
 };
 
 export const getStoredAuthToken = (): string | null => {
-  const token = localStorage.getItem('auth-token');
+  const token = memoryToken;
   if (token && isAuthTokenExpired(token)) {
     expireAuthSession();
     return null;
@@ -92,7 +113,7 @@ export const storeAuthToken = (token: unknown): boolean => {
     return false;
   }
 
-  localStorage.setItem('auth-token', token);
+  memoryToken = token;
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, { detail: token }));
   }

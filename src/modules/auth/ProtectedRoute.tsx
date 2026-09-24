@@ -5,6 +5,7 @@ import { useAuth } from '@/modules/auth/context/AuthContext';
 import { Onboarding } from '@/modules/onboarding';
 import AuthLoadingScreen from '@/modules/auth/AuthLoadingScreen';
 import LoginForm from '@/modules/auth/LoginForm';
+import PinForm from '@/modules/auth/PinForm';
 import SetupForm from '@/modules/auth/SetupForm';
 
 type ProtectedRouteProps = {
@@ -13,7 +14,7 @@ type ProtectedRouteProps = {
 
 /** Used by App to gate the routed application behind setup, login and onboarding. */
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { user, isLoading, needsSetup, hasCompletedOnboarding, refreshOnboardingStatus } = useAuth();
+  const { user, isLoading, needsSetup, authMode, hasCompletedOnboarding, refreshOnboardingStatus } = useAuth();
 
   if (isLoading) {
     return <AuthLoadingScreen />;
@@ -25,6 +26,11 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     }
 
     return <>{children}</>;
+  }
+
+  // Forja: Cloudflare Access identity + 6-digit PIN, no username/password.
+  if (authMode === 'pin' && (needsSetup || !user)) {
+    return <PinForm key={needsSetup ? 'setup' : 'unlock'} mode={needsSetup ? 'setup' : 'unlock'} />;
   }
 
   if (needsSetup) {

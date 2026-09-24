@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 
 import {
   AUTH_SESSION_EXPIRED_EVENT,
+  clearAuthToken,
   AUTH_TOKEN_REFRESHED_EVENT,
   getAuthTokenRefreshDelay,
   getStoredAuthToken,
@@ -55,8 +56,8 @@ test('isAuthTokenExpired: a malformed/unreadable token is unaffected by the skew
   assert.equal(isAuthTokenExpired(null), false);
 });
 
-test('storeAuthToken: a valid token is persisted and announced to the app', () => {
-  localStorage.clear();
+test('storeAuthToken: a valid token is kept in memory and announced to the app', () => {
+  clearAuthToken();
   const now = Math.floor(Date.now() / 1000);
   const token = makeToken({ iat: now, exp: now + 600 });
 
@@ -70,24 +71,26 @@ test('storeAuthToken: a valid token is persisted and announced to the app', () =
 
   window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, onRefresh);
   assert.equal(stored, true);
-  assert.equal(localStorage.getItem('auth-token'), token);
+  assert.equal(getStoredAuthToken(), token);
   assert.equal(announced, token);
 });
 
 test('storeAuthToken: a non-token value is rejected and does not overwrite the session', () => {
-  localStorage.clear();
-  localStorage.setItem('auth-token', 'existing');
+  clearAuthToken();
+  const now = Math.floor(Date.now() / 1000);
+  const existing = makeToken({ iat: now, exp: now + 600 });
+  storeAuthToken(existing);
 
   assert.equal(storeAuthToken(undefined), false);
   assert.equal(storeAuthToken(''), false);
   assert.equal(storeAuthToken({ token: 'x' }), false);
-  assert.equal(localStorage.getItem('auth-token'), 'existing');
+  assert.equal(getStoredAuthToken(), existing);
 });
 
 test('getStoredAuthToken: an expired token is dropped and the expiry is announced once', () => {
-  localStorage.clear();
+  clearAuthToken();
   const now = Math.floor(Date.now() / 1000);
-  localStorage.setItem('auth-token', makeToken({ iat: now - 7200, exp: now - 3600 }));
+  storeAuthToken(makeToken({ iat: now - 7200, exp: now - 3600 }));
 
   let expiries = 0;
   const onExpired = () => {
@@ -99,18 +102,59 @@ test('getStoredAuthToken: an expired token is dropped and the expiry is announce
 
   window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onExpired);
   assert.equal(token, null, 'an expired token must not be handed to a request');
-  assert.equal(localStorage.getItem('auth-token'), null);
+  assert.equal(getStoredAuthToken(), null);
   assert.equal(expiries, 1);
 });
 
-test('getStoredAuthToken: a live token is returned and left in storage', () => {
-  localStorage.clear();
+test('getStoredAuthToken: a live token is returned and kept', () => {
+  clearAuthToken();
   const now = Math.floor(Date.now() / 1000);
   const token = makeToken({ iat: now, exp: now + 600 });
-  localStorage.setItem('auth-token', token);
+  storeAuthToken(token);
 
   assert.equal(getStoredAuthToken(), token);
-  assert.equal(localStorage.getItem('auth-token'), token);
+  assert.equal(getStoredAuthToken(), token);
+});
+
+// Forja: the session must not survive closing the app / reloading the page.
+test('the session token is never written to localStorage or sessionStorage', () => {
+  localStorage.clear();
+  sessionStorage.clear();
+  const now = Math.floor(Date.now() / 1000);
+  const token = makeToken({ iat: now, exp: now + 600 });
+
+  storeAuthToken(token);
+
+  assert.equal(getStoredAuthToken(), token);
+  for (const storage of [localStorage, sessionStorage]) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const storageKey = storage.key(index) ?? '';
+      assert.ok(!(storage.getItem(storageKey) ?? '').includes(token), `token leaked into web storage key ${storageKey}`);
+    }
+  }
+  clearAuthToken();
+  assert.equal(getStoredAuthToken(), null);
+});
+
+test('a token left in localStorage by an older build is purged and never used', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const legacy = makeToken({ iat: now, exp: now + 600 });
+  localStorage.setItem('auth-token', legacy);
+  vi.resetModules();
+  const fresh = await import('@/shared/authToken');
+
+  assert.equal(localStorage.getItem('auth-token'), null);
+  assert.equal(fresh.getStoredAuthToken(), null);
+});
+
+test('a fresh page load (new module instance) starts with no session', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  storeAuthToken(makeToken({ iat: now, exp: now + 600 }));
+  vi.resetModules();
+  const fresh = await import('@/shared/authToken');
+
+  assert.equal(fresh.getStoredAuthToken(), null);
+  clearAuthToken();
 });
 
 test('getAuthTokenRefreshDelay: refresh is scheduled at the halfway point of the lifetime', () => {
