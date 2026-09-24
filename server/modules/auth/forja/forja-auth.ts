@@ -25,6 +25,9 @@ import { pinRepository } from './pin.repository.js';
 import { createPinService, type PinService } from './pin.service.js';
 
 export const FORJA_TOKEN_AMR = 'forja-pin';
+/** Single-purpose ticket for EventSource URLs (cannot send headers). */
+export const FORJA_SSE_AMR = 'forja-sse';
+export const SSE_TICKET_TTL_SECONDS = 60;
 const MAX_SESSION_HOURS = 12;
 
 export function isForjaPinMode(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -66,12 +69,24 @@ function clientIp(req: Request): string | null {
   return value || req.ip || null;
 }
 
-function bearerToken(req: Request): string | null {
+/**
+ * The session token only travels in the Authorization header. EventSource
+ * cannot set headers, so GET requests may carry a 60 s SSE ticket in
+ * `?token=` instead (never the 12 h session token: URLs end up in logs).
+ */
+function readCredential(req: Request): { token: string; kind: 'session' | 'sse' } | null {
   const header = req.headers.authorization;
   const fromHeader = header?.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  if (fromHeader) return fromHeader;
-  // SSE endpoints cannot set headers (EventSource), same as upstream.
-  return typeof req.query.token === 'string' && req.query.token ? req.query.token : null;
+  if (fromHeader) return { token: fromHeader, kind: 'session' };
+  if (req.method === 'GET' && typeof req.query.token === 'string' && req.query.token) {
+    return { token: req.query.token, kind: 'sse' };
+  }
+  return null;
+}
+
+/** True when the request came through Cloudflare (the tunnel), not a direct local call. */
+export function isCloudflareRequest(headers: IncomingHttpHeaders): boolean {
+  return Boolean(headers['cf-ray'] || headers['cf-connecting-ip'] || headers['cf-access-jwt-assertion']);
 }
 
 export function createForjaAuth(dependencies: ForjaAuthDependencies) {
@@ -92,11 +107,24 @@ export function createForjaAuth(dependencies: ForjaAuthDependencies) {
     issueToken,
   });
 
-  /** Verifies an app session token and that it belongs to the Access email. */
-  function verifySession(token: string, email: string): { user: SessionUser } | { error: 'expired' | 'invalid' } {
+  function issueSseTicket(user: { id: number; username: string }): string {
+    return jwt.sign(
+      { userId: user.id, email: user.username, amr: FORJA_SSE_AMR },
+      secret,
+      { expiresIn: SSE_TICKET_TTL_SECONDS, algorithm: 'HS256' },
+    );
+  }
+
+  /** Verifies an app session token (or SSE ticket) and that it belongs to the Access email. */
+  function verifySession(
+    token: string,
+    email: string,
+    kind: 'session' | 'sse' = 'session',
+  ): { user: SessionUser } | { error: 'expired' | 'invalid' } {
     try {
       const claims = jwt.verify(token, secret, { algorithms: ['HS256'] }) as jwt.JwtPayload;
-      if (claims.amr !== FORJA_TOKEN_AMR || typeof claims.userId !== 'number' || claims.email !== email) {
+      const expectedAmr = kind === 'sse' ? FORJA_SSE_AMR : FORJA_TOKEN_AMR;
+      if (claims.amr !== expectedAmr || typeof claims.userId !== 'number' || claims.email !== email) {
         if (claims.email && claims.email !== email) {
           console.warn(`[forja-auth] token for ${String(claims.email)} presented by Access identity ${email}`);
         }
@@ -128,12 +156,13 @@ export function createForjaAuth(dependencies: ForjaAuthDependencies) {
     if (!access.ok) {
       return denyAccess(res, access.reason);
     }
-    const token = bearerToken(req);
-    if (!token) {
+    const credential = readCredential(req);
+    if (!credential) {
       res.setHeader('X-Auth-Error', 'invalid-token');
       return res.status(401).json({ error: 'Access denied. No token provided.', code: 'AUTH_TOKEN_INVALID' });
     }
-    const session = verifySession(token, access.identity.email);
+    const { token } = credential;
+    const session = verifySession(token, access.identity.email, credential.kind);
     if ('error' in session) {
       const expired = session.error === 'expired';
       res.setHeader('X-Auth-Error', expired ? 'session-expired' : 'invalid-token');
@@ -147,6 +176,19 @@ export function createForjaAuth(dependencies: ForjaAuthDependencies) {
     forjaReq.forjaToken = token;
     forjaReq.forjaEmail = access.identity.email;
     return next();
+  };
+
+  /**
+   * Gate for routes upstream leaves without a session (`/api/agent`,
+   * `/api/browser-use-mcp`): anything that came through Cloudflare needs the
+   * Access JWT + PIN session; direct local calls (the Browser MCP bridge on
+   * 127.0.0.1, no cf-* headers) keep the route's own token check.
+   */
+  const gateTunnelRequests: RequestHandler = (req, res, next) => {
+    if (!isCloudflareRequest(req.headers)) {
+      return next();
+    }
+    return authenticateToken(req, res, next);
   };
 
   function authenticateWebSocket(token: string | null, headers: IncomingHttpHeaders | undefined) {
@@ -210,6 +252,13 @@ export function createForjaAuth(dependencies: ForjaAuthDependencies) {
       res.json({ token: (req as ForjaRequest).forjaToken });
     });
 
+    // Short-lived ticket for EventSource URLs; needs the header session token.
+    router.post('/sse-ticket', authenticateToken, (req, res) => {
+      const user = (req as ForjaRequest).user as SessionUser;
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ ticket: issueSseTicket(user), expiresIn: SSE_TICKET_TTL_SECONDS });
+    });
+
     router.post('/logout', authenticateToken, (_req, res) => {
       res.json({ success: true, message: 'Logged out successfully' });
     });
@@ -217,12 +266,29 @@ export function createForjaAuth(dependencies: ForjaAuthDependencies) {
     return router;
   }
 
-  return { authenticateToken, authenticateWebSocket, createRouter, issueToken, verifySession, pinService };
+  return {
+    authenticateToken,
+    authenticateWebSocket,
+    createRouter,
+    gateTunnelRequests,
+    issueSseTicket,
+    issueToken,
+    verifySession,
+    pinService,
+  };
 }
 
 export type ForjaAuth = ReturnType<typeof createForjaAuth>;
 
 let instance: ForjaAuth | null = null;
+
+/** Route gate used by server/index.ts; a no-op unless FORJA_AUTH=pin. */
+export const forjaRouteGate: RequestHandler = (req, res, next) => {
+  if (!isForjaPinMode()) {
+    return next();
+  }
+  return getForjaAuth().gateTunnelRequests(req, res, next);
+};
 
 /** Process-wide Forja auth, built from the environment on first use. */
 export function getForjaAuth(): ForjaAuth {

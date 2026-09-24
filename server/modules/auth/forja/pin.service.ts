@@ -59,6 +59,9 @@ export function createPinService(dependencies: PinServiceDependencies) {
     return next;
   }
 
+  let dummyHashPromise: Promise<string> | null = null;
+  const dummyHash = () => (dummyHashPromise ??= dependencies.hashPin('000000'));
+
   function session(user: PinUser) {
     return {
       success: true,
@@ -96,6 +99,8 @@ export function createPinService(dependencies: PinServiceDependencies) {
   async function unlockNow(email: string, pinInput: unknown, ip: string | null) {
     const user = repo.getUserByEmail(email);
     if (!user) {
+      // Same bcrypt cost as a real check, so timing does not reveal whether a PIN exists.
+      await dependencies.comparePin(typeof pinInput === 'string' ? pinInput : '', await dummyHash());
       throw new AppError('No PIN set for this account yet', { code: 'PIN_NOT_SET', statusCode: 409 });
     }
     const state = repo.getState(user.id);

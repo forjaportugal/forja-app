@@ -7,3 +7,5 @@ export { authenticateToken } from './auth.middleware.js';
 export { authenticateWebSocket } from './auth.middleware.js';
 // validateApiKey: used by the server entrypoint for optional API-wide key validation.
 export { validateApiKey } from './auth.middleware.js';
+// forjaRouteGate: Forja PIN mode gate for routes upstream mounts without a session (no-op otherwise).
+export { forjaRouteGate } from './forja/forja-auth.js';

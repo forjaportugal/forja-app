@@ -139,3 +139,21 @@ test('every attempt is logged with its outcome', async () => {
     assert.ok(rows.every((r) => r.email === ALICE && r.ip === '203.0.113.7'));
   });
 });
+
+test('unknown account still pays a bcrypt compare (no timing hint that no PIN exists)', async () => {
+  await withTempDatabase(async () => {
+    let compares = 0;
+    const pins = createPinService({
+      repo: pinRepository,
+      hashPin: (pin) => bcrypt.hash(pin, 4),
+      comparePin: async (pin, hash) => {
+        compares += 1;
+        return bcrypt.compare(pin, hash);
+      },
+      issueToken: () => 'token',
+      log: () => undefined,
+    });
+    await rejectsWith(pins.unlock(BOB, '123456'), 'PIN_NOT_SET');
+    assert.equal(compares, 1);
+  });
+});

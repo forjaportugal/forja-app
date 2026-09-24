@@ -19,10 +19,12 @@ const bcrypt = createRequire(import.meta.url)('bcrypt') as {
 };
 
 const key = makeKey('kid-routes');
+
+type CallInit = { method?: string; email?: string | null; token?: string; body?: unknown; headers?: Record<string, string> };
 const SECRET = 'test-secret';
 
 async function withApp(run: (ctx: {
-  call: (path: string, init?: { method?: string; email?: string | null; token?: string; body?: unknown }) => Promise<{ status: number; body: any }>;
+  call: (path: string, init?: CallInit) => Promise<{ status: number; body: any }>;
   auth: ReturnType<typeof createForjaAuth>;
 }) => Promise<void>) {
   await withTempDatabase(async () => {
@@ -45,15 +47,19 @@ async function withApp(run: (ctx: {
     const app = express();
     app.use(express.json());
     app.use('/api/auth', auth.createRouter());
-    app.get('/api/protected', auth.authenticateToken, (req, res) => {
+    // Stand-ins for upstream routes mounted without a session (/api/agent, /api/browser-use-mcp).
+    app.use('/api/agent', auth.gateTunnelRequests, (_req, res) => {
+      res.json({ reached: 'agent' });
+    });
+    app.all('/api/protected', auth.authenticateToken, (req, res) => {
       res.json({ user: (req as express.Request & { user?: unknown }).user });
     });
     const server = app.listen(0, '127.0.0.1');
     await new Promise((resolve) => server.once('listening', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-    const call = async (path: string, init: { method?: string; email?: string | null; token?: string; body?: unknown } = {}) => {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const call = async (path: string, init: CallInit = {}) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', ...init.headers };
       if (init.email !== null) headers['Cf-Access-Jwt-Assertion'] = accessJwt(key, { email: init.email ?? ALICE });
       if (init.token) headers.Authorization = `Bearer ${init.token}`;
       const response = await fetch(`${base}${path}`, {
@@ -158,4 +164,43 @@ test('session lifetime is capped at 12 h', () => {
   assert.equal(sessionTtlSeconds({ FORJA_SESSION_HOURS: '48' }), 12 * 3600);
   assert.equal(sessionTtlSeconds({ FORJA_SESSION_HOURS: '2' }), 2 * 3600);
   assert.equal(sessionTtlSeconds({ FORJA_SESSION_HOURS: 'nope' }), 12 * 3600);
+});
+
+test('routes upstream leaves open need Access + PIN session when they come through Cloudflare', async () => {
+  await withApp(async ({ call }) => {
+    const { body } = await call('/api/auth/register', { method: 'POST', body: { pin: '123456', pinConfirm: '123456' } });
+    // Through the tunnel without a session: refused.
+    assert.equal((await call('/api/agent', { method: 'POST', headers: { 'cf-ray': 'abc' } })).status, 401);
+    assert.equal((await call('/api/agent', { method: 'POST', email: null, headers: { 'cf-ray': 'abc' } })).status, 401);
+    // Through the tunnel with Access + session: reaches the route (which keeps its own key check).
+    assert.equal((await call('/api/agent', { method: 'POST', token: body.token, headers: { 'cf-ray': 'abc' } })).status, 200);
+    // Direct local call (Browser MCP bridge on 127.0.0.1, no cf-* headers): the route's own token check applies.
+    assert.equal((await call('/api/agent', { method: 'POST', email: null })).status, 200);
+  });
+});
+
+test('SSE: only a 60 s single-purpose ticket is accepted in the query string', async () => {
+  await withApp(async ({ call }) => {
+    const { body } = await call('/api/auth/register', { method: 'POST', body: { pin: '123456', pinConfirm: '123456' } });
+    const bob = await call('/api/auth/register', { method: 'POST', email: BOB, body: { pin: '222222', pinConfirm: '222222' } });
+
+    // The 12 h session token is refused in the URL.
+    assert.equal((await call(`/api/protected?token=${body.token}`)).status, 401);
+    assert.equal((await call('/api/auth/sse-ticket', { method: 'POST' })).status, 401);
+
+    const issued = await call('/api/auth/sse-ticket', { method: 'POST', token: body.token });
+    assert.equal(issued.status, 200);
+    const claims = jwt.decode(issued.body.ticket) as jwt.JwtPayload;
+    assert.ok(claims.exp && claims.iat && claims.exp - claims.iat <= 60);
+
+    assert.equal((await call(`/api/protected?token=${issued.body.ticket}`)).status, 200);
+    // Not usable as a session token, nor on non-GET, nor by another Access identity.
+    assert.equal((await call('/api/protected', { token: issued.body.ticket })).status, 401);
+    assert.equal((await call(`/api/protected?token=${issued.body.ticket}`, { method: 'POST' })).status, 401);
+    assert.equal((await call(`/api/protected?token=${issued.body.ticket}`, { email: BOB })).status, 401);
+    assert.equal((await call('/api/protected', { token: bob.body.token, email: BOB })).status, 200);
+
+    const expired = jwt.sign({ userId: body.user.id, email: ALICE, amr: 'forja-sse' }, SECRET, { expiresIn: -1 });
+    assert.equal((await call(`/api/protected?token=${expired}`)).status, 401);
+  });
 });

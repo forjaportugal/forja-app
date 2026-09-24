@@ -24,6 +24,7 @@ import {
     authenticateToken,
     authenticateWebSocket,
     authRoutes,
+    forjaRouteGate,
     validateApiKey,
 } from './modules/auth/index.js';
 import { taskmasterRoutes } from './modules/taskmaster/index.js';
@@ -185,7 +186,7 @@ app.use('/api/user', authenticateToken, userRoutes);
 app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
 // Browser MCP bridge API (local token protected)
-app.use('/api/browser-use-mcp', browserUseMcpRoutes);
+app.use('/api/browser-use-mcp', forjaRouteGate, browserUseMcpRoutes);
 
 // Browser API Routes (protected)
 app.use('/api/browser-use', authenticateToken, browserUseRoutes);
@@ -195,7 +196,7 @@ app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/scheduled-messages', authenticateToken, scheduledMessagesRoutes);
 
 // Agent API Routes (uses API key authentication)
-app.use('/api/agent', agentRoutes);
+app.use('/api/agent', forjaRouteGate, agentRoutes);
 
 app.use('/api/voice', authenticateToken, voiceRoutes);
 
