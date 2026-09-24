@@ -1,10 +1,13 @@
+import type { IncomingHttpHeaders } from 'node:http';
+
 import type { VerifyClientCallbackSync } from 'ws';
 
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketAuthDependencies = {
   isPlatform: boolean;
-  authenticateWebSocket: (token: string | null) => {
+  // headers: used by the Forja PIN mode to re-verify the Cloudflare Access JWT.
+  authenticateWebSocket: (token: string | null, headers?: IncomingHttpHeaders) => {
     id?: string | number;
     userId?: string | number;
     username?: string;
@@ -47,7 +50,7 @@ export function verifyWebSocketClient(
     request.headers.authorization?.split(' ')[1] ??
     null;
 
-  const user = dependencies.authenticateWebSocket(token);
+  const user = dependencies.authenticateWebSocket(token, request.headers);
   if (!user) {
     console.log('[WARN] WebSocket authentication failed');
     return false;

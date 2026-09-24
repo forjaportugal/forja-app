@@ -5,6 +5,7 @@ import { getConnection, userDb } from '@/modules/database/index.js';
 import { authenticateToken, generateToken } from './auth.middleware.js';
 import { createAuthRouter } from './auth.routes.js';
 import { createAuthService } from './auth.service.js';
+import { getForjaAuth, isForjaPinMode } from './forja/forja-auth.js';
 
 type BcryptAdapter = {
   hash(password: string, saltRounds: number): Promise<string>;
@@ -35,4 +36,6 @@ const authService = createAuthService({
 });
 
 /** Auth router assembled for the server entrypoint. */
-export const authRoutes = createAuthRouter(authService, authenticateToken);
+export const authRoutes = isForjaPinMode()
+  ? getForjaAuth().createRouter()
+  : createAuthRouter(authService, authenticateToken);

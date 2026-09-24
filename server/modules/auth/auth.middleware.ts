@@ -5,6 +5,9 @@ import { IS_PLATFORM } from '@/shared/utils.js';
 
 import { userDb, appConfigDb } from '../database/index.js';
 
+// Forja: Cloudflare Access + PIN mode (FORJA_AUTH=pin), see ./forja/forja-auth.ts
+import { getForjaAuth, isForjaPinMode } from './forja/forja-auth.js';
+
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
 
@@ -24,6 +27,10 @@ const validateApiKey = (req, res, next) => {
 
 // JWT authentication middleware
 const authenticateToken = async (req, res, next) => {
+  if (isForjaPinMode()) {
+    return getForjaAuth().authenticateToken(req, res, next);
+  }
+
   // Platform mode:  use single database user
   if (IS_PLATFORM) {
     try {
@@ -115,7 +122,11 @@ const generateToken = (user) => {
 };
 
 // WebSocket authentication function
-const authenticateWebSocket = (token) => {
+const authenticateWebSocket = (token, headers) => {
+  if (isForjaPinMode()) {
+    return getForjaAuth().authenticateWebSocket(token, headers);
+  }
+
   // Platform mode: bypass token validation, return first user
   if (IS_PLATFORM) {
     try {
