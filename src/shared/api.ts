@@ -3,6 +3,7 @@ import {
   getStoredAuthToken,
   storeAuthToken,
 } from '@/shared/authToken';
+import { sseQueryToken } from '@/shared/sseTicket';
 import { IS_PLATFORM } from '@/shared/utils';
 import { readVoiceConfig, voiceConfigHeaders } from '@/shared/voiceConfig';
 
@@ -206,12 +207,12 @@ export const api = {
   // EventSource cannot send an Authorization header, so the token rides along as
   // a query parameter on the streaming endpoints below.
   cloneProjectProgressUrl: (params: Record<string, QueryValue>) =>
-    `/api/projects/clone-progress${query({ ...params, token: getStoredAuthToken() })}`,
+    `/api/projects/clone-progress${query({ ...params, token: sseQueryToken() })}`,
   searchConversationsUrl: (searchQuery: string, limit = 50) =>
     `/api/providers/search/sessions${query({
       q: searchQuery,
       limit,
-      token: getStoredAuthToken(),
+      token: sseQueryToken(),
     })}`,
 
   // Session endpoints. Provider/project metadata are resolved by the backend

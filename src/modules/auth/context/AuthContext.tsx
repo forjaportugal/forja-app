@@ -6,6 +6,7 @@ import { IS_PLATFORM } from '@/shared/utils';
 import { api } from '@/shared/api';
 import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, clearAuthToken, getAuthTokenRefreshDelay, getStoredAuthToken, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
 import { hydrateChatDrafts, resetChatDrafts } from '@/shared/chatDrafts';
+import { startSseTickets } from '@/shared/sseTicket';
 import { hydrateUserPreferences, resetUserPreferences } from '@/shared/userSettings';
 /** The signed-in account held by AuthContext - a required `username` plus an optional id and any additional fields the auth API returns - and should be read through `useAuth()` rather than re-derived from raw auth responses. */
 type AuthUser = {
@@ -22,13 +23,16 @@ const AUTH_ERROR_MESSAGES = {
   sessionExpired: 'errors.sessionExpired',
 } as const;
 
-type AuthActionResult = { success: true } | { success: false; error: string };
+// code/details: Forja PIN mode error codes (PIN_INVALID, PIN_LOCKED, ...) for the PIN screen.
+type AuthActionResult = { success: true } | { success: false; error: string; code?: string; details?: unknown };
 
 type AuthSessionPayload = {
   token?: string;
   user?: AuthUser;
   error?: string;
   message?: string;
+  code?: string;
+  details?: unknown;
 };
 
 type AuthStatusPayload = {
@@ -149,6 +153,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
     void hydrateUserPreferences();
     void hydrateChatDrafts();
   }, [userKey]);
+
+  // Forja PIN mode: keep a short-lived SSE ticket instead of putting the
+  // session token in EventSource URLs.
+  const hasSession = Boolean(token && user);
+  useEffect(() => {
+    if (authMode !== 'pin' || !hasSession) {
+      return undefined;
+    }
+    return startSseTickets();
+  }, [authMode, hasSession]);
 
   const checkOnboardingStatus = useCallback(async () => {
     try {
@@ -318,7 +332,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!response.ok || !payload?.token || !payload.user) {
           const message = resolveApiErrorMessage(payload, t(AUTH_ERROR_MESSAGES.loginFailed));
           setError(message);
-          return { success: false, error: message };
+          return { success: false, error: message, code: payload?.code, details: payload?.details };
         }
 
         setSession(payload.user, payload.token);
@@ -344,7 +358,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!response.ok || !payload?.token || !payload.user) {
           const message = resolveApiErrorMessage(payload, t(AUTH_ERROR_MESSAGES.registrationFailed));
           setError(message);
-          return { success: false, error: message };
+          return { success: false, error: message, code: payload?.code, details: payload?.details };
         }
 
         setSession(payload.user, payload.token);

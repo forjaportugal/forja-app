@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Delete, Loader2 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/context/AuthContext';
 import AuthErrorAlert from '@/modules/auth/AuthErrorAlert';
 import AuthScreenLayout from '@/modules/auth/AuthScreenLayout';
+import { pinErrorMessage, pinStrings, readPinLang, savePinLang, type PinLang } from '@/modules/auth/pin.i18n';
 
 const PIN_LENGTH = 6;
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'] as const;
@@ -19,7 +19,8 @@ type PinFormProps = {
  * password). Rendered by ProtectedRoute when the server runs in PIN mode.
  */
 export default function PinForm({ mode }: PinFormProps) {
-  const { t } = useTranslation('auth');
+  const [lang, setLang] = useState<PinLang>(readPinLang);
+  const strings = pinStrings(lang);
   const { accessEmail, error: sessionError, login, register } = useAuth();
 
   const [pin, setPin] = useState('');
@@ -40,7 +41,7 @@ export default function PinForm({ mode }: PinFormProps) {
       if (mode === 'setup' && firstPin !== value) {
         setFirstPin(null);
         setPin('');
-        setErrorMessage(t('pin.errors.mismatch', { defaultValue: 'The PINs do not match. Choose it again.' }));
+        setErrorMessage(strings.mismatch);
         return;
       }
 
@@ -51,10 +52,10 @@ export default function PinForm({ mode }: PinFormProps) {
       if (!result.success) {
         setPin('');
         if (mode === 'setup') setFirstPin(null);
-        setErrorMessage(result.error);
+        setErrorMessage(pinErrorMessage(strings, result));
       }
     },
-    [accessEmail, firstPin, login, mode, register, t],
+    [accessEmail, firstPin, login, mode, register, strings],
   );
 
   const press = useCallback(
@@ -85,19 +86,26 @@ export default function PinForm({ mode }: PinFormProps) {
   }, [press]);
 
   const title = mode === 'unlock'
-    ? t('pin.unlockTitle', { defaultValue: 'Enter your PIN' })
+    ? strings.unlockTitle
     : isConfirming
-      ? t('pin.confirmTitle', { defaultValue: 'Confirm your PIN' })
-      : t('pin.setupTitle', { defaultValue: 'Choose your 6-digit PIN' });
+      ? strings.confirmTitle
+      : strings.setupTitle;
+
+  const toggleLang = () => {
+    const next: PinLang = lang === 'pt-PT' ? 'en' : 'pt-PT';
+    savePinLang(next);
+    setLang(next);
+    setErrorMessage('');
+  };
 
   return (
     <AuthScreenLayout
       title={title}
       description={accessEmail ?? ''}
-      footerText={t('pin.footer', { defaultValue: 'Access is limited to enrolled devices. The PIN is asked every time the app opens.' })}
+      footerText={strings.footer}
     >
-      <div className="space-y-6">
-        <div className="flex justify-center gap-3" aria-label={t('pin.digitsEntered', { defaultValue: 'Digits entered' })} aria-live="polite">
+      <div className="space-y-6" lang={lang}>
+        <div className="flex justify-center gap-3" aria-label={strings.digitsEntered} aria-live="polite">
           {Array.from({ length: PIN_LENGTH }, (_, index) => (
             <span
               key={index}
@@ -119,13 +127,24 @@ export default function PinForm({ mode }: PinFormProps) {
                 type="button"
                 onClick={() => press(key)}
                 disabled={isSubmitting}
-                aria-label={key === 'back' ? t('pin.delete', { defaultValue: 'Delete' }) : key}
+                aria-label={key === 'back' ? strings.delete : key}
                 className="flex h-16 items-center justify-center rounded-2xl bg-muted/60 text-2xl font-medium text-foreground transition-colors hover:bg-muted active:scale-95 disabled:opacity-50"
               >
                 {key === 'back' ? <Delete className="h-6 w-6" /> : key}
               </button>
             ),
           )}
+        </div>
+
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={toggleLang}
+            lang={lang === 'pt-PT' ? 'en' : 'pt-PT'}
+            className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+          >
+            {strings.switchLanguage}
+          </button>
         </div>
 
         {isSubmitting && (
