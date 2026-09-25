@@ -24,7 +24,9 @@ import {
     authenticateToken,
     authenticateWebSocket,
     authRoutes,
+    forjaDeviceGate,
     forjaRouteGate,
+    installForjaUpgradeGate,
     validateApiKey,
 } from './modules/auth/index.js';
 import { taskmasterRoutes } from './modules/taskmaster/index.js';
@@ -120,7 +122,11 @@ createWebSocketServer(server, {
     },
     getPluginPort,
 });
+// Forja device mode: refuse tunnel WebSocket handshakes without a registered device (no-op otherwise).
+installForjaUpgradeGate(server);
 
+// Forja device mode: first middleware, before any route or static file (no-op otherwise).
+app.use(forjaDeviceGate);
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'] }));
 app.use(express.json({
     limit: '50mb',

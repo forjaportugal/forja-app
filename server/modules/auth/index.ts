@@ -9,3 +9,5 @@ export { authenticateWebSocket } from './auth.middleware.js';
 export { validateApiKey } from './auth.middleware.js';
 // forjaRouteGate: Forja PIN mode gate for routes upstream mounts without a session (no-op otherwise).
 export { forjaRouteGate } from './forja/forja-auth.js';
+// forjaDeviceGate / installForjaUpgradeGate: Forja device mode gate in front of the whole app (no-op otherwise).
+export { forjaDeviceGate, installForjaUpgradeGate } from './forja/forja-auth.js';

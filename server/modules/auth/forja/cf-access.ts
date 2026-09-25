@@ -14,11 +14,12 @@ import jwt from 'jsonwebtoken';
 export const CF_ACCESS_JWT_HEADER = 'cf-access-jwt-assertion';
 export const CF_ACCESS_EMAIL_HEADER = 'cf-access-authenticated-user-email';
 
-export type AccessIdentity = { email: string; via: 'jwt' | 'dev-bypass' };
+/** `deviceId` is set only in device mode (FORJA_AUTH=device): the registered device the request came from. */
+export type AccessIdentity = { email: string; via: 'jwt' | 'dev-bypass' | 'device'; deviceId?: string };
 
 export type AccessFailure = {
   ok: false;
-  reason: 'missing' | 'invalid' | 'not-allowed' | 'misconfigured' | 'keys-unavailable';
+  reason: 'missing' | 'invalid' | 'not-allowed' | 'misconfigured' | 'keys-unavailable' | 'not-registered' | 'revoked';
 };
 
 export type AccessResult = { ok: true; identity: AccessIdentity } | AccessFailure;
