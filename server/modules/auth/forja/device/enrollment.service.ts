@@ -21,7 +21,7 @@ import { AppError } from '@/shared/utils.js';
 import type { CertificateSigner } from './cf-client-certs.js';
 import { parseAndVerifyCsr } from './csr.js';
 import type { DevicePlatform, DeviceRepository, EnrollmentKind } from './device.repository.js';
-import type { Mailer } from './mailer.js';
+import { buildEnrollmentCodeMail, type Mailer } from './mailer.js';
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const MAX_CODE_ATTEMPTS = 5;
@@ -134,12 +134,7 @@ export function createEnrollmentService(dependencies: EnrollmentDependencies) {
 
     if (kind === 'real') {
       try {
-        await mailer.send({
-          to: email,
-          subject: `Forja: código para registar o ${PLATFORM_LABEL[platform]}`,
-          text: `O teu código para registar o ${PLATFORM_LABEL[platform]} "${name}" na Forja é:\n\n    ${code}\n\n`
-            + 'É válido durante 10 minutos. Se não foste tu, ignora este email e avisa o Maestro.\n',
-        });
+        await mailer.send(buildEnrollmentCodeMail({ to: email, code, deviceLabel: PLATFORM_LABEL[platform], deviceName: name }));
       } catch (error) {
         repo.closeEnrollment(id, 'failed');
         log(`[forja-device] enroll mail failed: ${error instanceof Error ? error.message : String(error)}`);
