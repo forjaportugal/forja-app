@@ -47,12 +47,12 @@ function harness(options: { readFile?: (p: string) => string; fail?: Error } = {
   return { logs, configs, sent, readPaths, mailerOptions };
 }
 
-test('gmail-smtp: smtp.gmail.com:465, default user and password file, password trimmed and de-spaced', async () => {
+test('gmail-smtp: smtp.gmail.com:587, default user and password file, password trimmed and de-spaced', async () => {
   const h = harness();
   const mailer = loadMailer({ FORJA_MAIL: 'gmail-smtp' }, h.mailerOptions);
   assert.ok(mailer);
   assert.deepEqual(h.readPaths, [DEFAULT_MAIL_PASSWORD_FILE]);
-  assert.deepEqual(h.configs, [{ host: 'smtp.gmail.com', port: 465, user: DEFAULT_MAIL_USER, password: PASSWORD_NO_SPACES }]);
+  assert.deepEqual(h.configs, [{ host: 'smtp.gmail.com', port: 587, user: DEFAULT_MAIL_USER, password: PASSWORD_NO_SPACES }]);
   assert.equal(DEFAULT_MAIL_USER, 'forjaportugal@gmail.com');
   assert.equal(DEFAULT_MAIL_PASSWORD_FILE, '/srv/forja/.secrets/gmail-app-password');
 
@@ -71,11 +71,12 @@ test('gmail-smtp: FORJA_MAIL_USER and FORJA_MAIL_PASSWORD_FILE override the defa
   assert.equal(h.configs[0].user, 'other@gmail.com');
 });
 
-test('gmail-smtp: nodemailer options use implicit TLS with a verified certificate', () => {
+test('gmail-smtp: nodemailer options require STARTTLS with a verified certificate', () => {
   const options = smtpTransportOptions({ ...GMAIL_SMTP, user: 'u@gmail.com', password: 'p' });
   assert.equal(options.host, 'smtp.gmail.com');
-  assert.equal(options.port, 465);
-  assert.equal(options.secure, true);
+  assert.equal(options.port, 587);
+  assert.equal(options.secure, false);
+  assert.equal(options.requireTLS, true);
   assert.equal(options.tls.rejectUnauthorized, true);
   assert.equal(options.tls.servername, 'smtp.gmail.com');
   assert.equal(options.logger, false);

@@ -2,7 +2,7 @@
  * Forja device mode: how the one-time enrolment code reaches the person.
  *
  * FORJA_MAIL selects the transport:
- * - `gmail-smtp`: smtp.gmail.com:465, implicit TLS with a verified
+ * - `gmail-smtp`: smtp.gmail.com:587, mandatory STARTTLS with a verified
  *   certificate, logged in as FORJA_MAIL_USER (default forjaportugal@gmail.com)
  *   with the Gmail app password in FORJA_MAIL_PASSWORD_FILE (default
  *   /srv/forja/.secrets/gmail-app-password). Missing/unreadable/empty password
@@ -22,7 +22,7 @@ export type MailMessage = { to: string; subject: string; text: string; html?: st
 
 export type Mailer = { send(message: MailMessage): Promise<void> };
 
-export const GMAIL_SMTP = { host: 'smtp.gmail.com', port: 465 } as const;
+export const GMAIL_SMTP = { host: 'smtp.gmail.com', port: 587 } as const; // STARTTLS: Hetzner blocks outbound 465
 export const DEFAULT_MAIL_USER = 'forjaportugal@gmail.com';
 export const DEFAULT_MAIL_PASSWORD_FILE = '/srv/forja/.secrets/gmail-app-password';
 
@@ -37,12 +37,13 @@ export type MailerOptions = {
   logError?: (line: string) => void;
 };
 
-/** nodemailer SMTP options: implicit TLS, certificate verified, no file/URL access. */
+/** nodemailer SMTP options: STARTTLS required, certificate verified, no file/URL access. */
 export function smtpTransportOptions(config: SmtpConfig) {
   return {
     host: config.host,
     port: config.port,
-    secure: true, // implicit TLS on 465
+    secure: false,
+    requireTLS: true, // STARTTLS mandatory; never falls back to plaintext
     auth: { user: config.user, pass: config.password },
     tls: { rejectUnauthorized: true, servername: config.host, minVersion: 'TLSv1.2' as const },
     connectionTimeout: 15_000,
