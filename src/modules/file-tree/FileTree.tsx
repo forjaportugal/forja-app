@@ -20,6 +20,7 @@ import FileTreeHeader from '@/modules/file-tree/FileTreeHeader';
 import FileTreeLoadingState from '@/modules/file-tree/FileTreeLoadingState';
 import FileTreeUploadProgress from '@/modules/file-tree/FileTreeUploadProgress';
 import ImageViewer from '@/modules/file-tree/ImageViewer';
+import { enableDirectoryPicker } from '@/modules/file-tree/utils/uploadBatching';
 
 
 type FileTreeProps = {
@@ -73,14 +74,25 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   const operationLoading = operations.operationLoading || upload.operationLoading;
 
   // Folder-targeted uploads (context menu / hover button) share one hidden
-  // input; the target path is remembered until the user picks the files.
+  // input per picker kind (files or a whole folder); the target path is
+  // remembered until the user picks.
   const folderUploadInputRef = useRef<HTMLInputElement>(null);
+  const directoryPickerInputRef = useRef<HTMLInputElement | null>(null);
+  const setDirectoryPickerInput = useCallback((input: HTMLInputElement | null) => {
+    directoryPickerInputRef.current = input;
+    enableDirectoryPicker(input);
+  }, []);
   const folderUploadTargetRef = useRef('');
   const { uploadFiles } = upload;
 
   const handleUploadToFolder = useCallback((targetPath: string) => {
     folderUploadTargetRef.current = targetPath;
     folderUploadInputRef.current?.click();
+  }, []);
+
+  const handleUploadFolderToFolder = useCallback((targetPath: string) => {
+    folderUploadTargetRef.current = targetPath;
+    directoryPickerInputRef.current?.click();
   }, []);
 
   const handleFolderUploadInputChange = useCallback(
@@ -168,6 +180,16 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         tabIndex={-1}
         aria-hidden="true"
       />
+      {/* Hidden folder picker for "Upload Folder Here" (keeps subfolder paths) */}
+      <input
+        ref={setDirectoryPickerInput}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFolderUploadInputChange}
+        tabIndex={-1}
+        aria-hidden="true"
+      />
 
       {/* Drag overlay; pointer-events-none keeps folder rows reachable as drop targets */}
       {upload.isDragOver && (
@@ -191,6 +213,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
         onUploadFiles={upload.handleFileSelect}
+        onUploadFolder={upload.handleFileSelect}
         onNewFile={() => operations.handleStartCreate('', 'file')}
         onNewFolder={() => operations.handleStartCreate('', 'directory')}
         onRefresh={refreshFiles}
@@ -256,6 +279,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
           onUpload={handleUploadToFolder}
+          onUploadFolder={handleUploadFolderToFolder}
           onRefresh={refreshFiles}
           dropTarget={upload.dropTarget}
           onItemDragOver={upload.handleItemDragOver}

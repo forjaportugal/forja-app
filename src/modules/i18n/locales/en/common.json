@@ -122,6 +122,7 @@
     "newFolder": "New Folder (Cmd+Shift+N)",
     "refresh": "Refresh",
     "collapseAll": "Collapse All",
+    "uploadFolder": "Upload folder (keeps subfolders; skips node_modules, .venv, ...)",
     "context": {
       "rename": "Rename",
       "delete": "Delete",
@@ -130,6 +131,7 @@
       "newFile": "New File",
       "newFolder": "New Folder",
       "upload": "Upload Files",
+      "uploadFolder": "Upload Folder Here",
       "refresh": "Refresh",
       "menuLabel": "File context menu",
       "loading": "Loading..."

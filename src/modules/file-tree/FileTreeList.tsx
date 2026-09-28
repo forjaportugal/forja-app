@@ -18,6 +18,7 @@ type FileTreeListProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onUpload?: (path: string) => void;
+  onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
   // Drag-and-drop upload targeting
   dropTarget?: string | null;
@@ -48,6 +49,7 @@ export default function FileTreeList({
   onCopyPath,
   onDownload,
   onUpload,
+  onUploadFolder,
   onRefresh,
   dropTarget,
   onItemDragOver,
@@ -79,6 +81,7 @@ export default function FileTreeList({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onUpload={onUpload}
+          onUploadFolder={onUploadFolder}
           onRefresh={onRefresh}
           dropTarget={dropTarget}
           onItemDragOver={onItemDragOver}

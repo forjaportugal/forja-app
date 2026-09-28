@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Download, FileText, FolderPlus, Pencil, RefreshCw, Trash2, Upload, type LucideIcon } from 'lucide-react';
+import { Copy, Download, FileText, FolderPlus, FolderUp, Pencil, RefreshCw, Trash2, Upload, type LucideIcon } from 'lucide-react';
 
 import { cn } from '@/shared/utils';
 
@@ -27,7 +27,7 @@ type ContextMenuAction = {
 };
 
 const CONTEXT_MENU_WIDTH = 200;
-const CONTEXT_MENU_HEIGHT = 300;
+const CONTEXT_MENU_HEIGHT = 340;
 const VIEWPORT_PADDING = 10;
 
 function calculateViewportSafePosition(clientX: number, clientY: number) {
@@ -53,6 +53,7 @@ export default function FileContextMenu({
   onNewFile,
   onNewFolder,
   onUpload,
+  onUploadFolder,
   onRefresh,
   onCopyPath,
   onDownload,
@@ -66,6 +67,7 @@ export default function FileContextMenu({
   onNewFile?: (path: string) => void;
   onNewFolder?: (path: string) => void;
   onUpload?: (path: string) => void;
+  onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
   onCopyPath?: (item: FileContextItem) => void;
   onDownload?: (item: FileContextItem) => void;
@@ -146,6 +148,16 @@ export default function FileContextMenu({
           label: t('fileTree.context.upload', 'Upload Files'),
           onSelect: () => onUpload?.(item.path),
         },
+        ...(onUploadFolder
+          ? [
+              {
+                key: 'uploadFolder',
+                icon: FolderUp,
+                label: t('fileTree.context.uploadFolder', 'Upload Folder Here'),
+                onSelect: () => onUploadFolder(item.path),
+              },
+            ]
+          : []),
         {
           key: 'rename',
           icon: Pencil,
@@ -195,6 +207,16 @@ export default function FileContextMenu({
         label: t('fileTree.context.upload', 'Upload Files'),
         onSelect: () => onUpload?.(''),
       },
+      ...(onUploadFolder
+        ? [
+            {
+              key: 'uploadFolder',
+              icon: FolderUp,
+              label: t('fileTree.context.uploadFolder', 'Upload Folder Here'),
+              onSelect: () => onUploadFolder(''),
+            },
+          ]
+        : []),
       {
         key: 'refresh',
         icon: RefreshCw,
@@ -203,7 +225,7 @@ export default function FileContextMenu({
         showDividerBefore: true,
       },
     ];
-  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, onUpload, t]);
+  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, onUpload, onUploadFolder, t]);
 
   useEffect(() => {
     if (!isMenuOpen) {

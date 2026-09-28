@@ -6,6 +6,20 @@ import type { FileTreeUploadProgressState, Project } from '@/shared/types';
 import { api } from '@/shared/api';
 import { expireAuthSession, getStoredAuthToken, storeAuthToken } from '@/shared/authToken';
 import { MAX_FILE_UPLOAD_SIZE_BYTES, MAX_FILE_UPLOAD_SIZE_LABEL } from '@/shared/constants';
+import {
+  IGNORED_UPLOAD_FILES,
+  MAX_FILES_PER_UPLOAD_REQUEST,
+  MAX_TOTAL_UPLOAD_FILES,
+  emptyUploadSkipSummary,
+  filterUploadFiles,
+  formatUploadSkipSummary,
+  isSkippedUploadDirectory,
+  mergeUploadSkipSummaries,
+  runBatchedUpload,
+  splitUploadPath,
+  summarizeFileNames,
+} from '@/modules/file-tree/utils/uploadBatching';
+import type { UploadSkipSummary } from '@/modules/file-tree/utils/uploadBatching';
 
 type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
@@ -22,10 +36,11 @@ type UploadResponse = {
   requestedFileCount?: number;
 };
 
-const MAX_FILE_UPLOAD_COUNT = 20;
-
 const COMPLETE_PROGRESS_CLEAR_DELAY_MS = 1400;
 const ERROR_PROGRESS_CLEAR_DELAY_MS = 3200;
+// A partially failed batch upload lists the files that were not stored; keep it
+// on screen long enough to read.
+const PARTIAL_FAILURE_PROGRESS_CLEAR_DELAY_MS = 12000;
 
 const pluralizeFiles = (count: number) => (count === 1 ? 'file' : 'files');
 
@@ -40,8 +55,8 @@ const getFileDisplayName = (file: File) => {
 };
 
 const validateFilesForUpload = (files: File[]): string | null => {
-  if (files.length > MAX_FILE_UPLOAD_COUNT) {
-    return `You can upload up to ${MAX_FILE_UPLOAD_COUNT} files at once.`;
+  if (files.length > MAX_TOTAL_UPLOAD_FILES) {
+    return `This upload has ${files.length} files; the limit is ${MAX_TOTAL_UPLOAD_FILES} per upload. Upload the folder in smaller parts.`;
   }
 
   const oversizedFile = files.find((file) => file.size > MAX_FILE_UPLOAD_SIZE_BYTES);
@@ -64,12 +79,17 @@ const parseUploadResponse = (xhr: XMLHttpRequest): UploadResponse => {
   }
 };
 
-const formatUploadSuccessMessage = (uploadedCount: number, requestedFileCount: number) => {
+const withSkipNote = (message: string, skipped: UploadSkipSummary) => {
+  const note = formatUploadSkipSummary(skipped);
+  return note ? `${message} (${note})` : message;
+};
+
+const formatUploadSuccessMessage = (uploadedCount: number, requestedFileCount: number, skipped: UploadSkipSummary) => {
   if (uploadedCount !== requestedFileCount) {
-    return `Uploaded ${uploadedCount} of ${requestedFileCount} ${pluralizeFiles(requestedFileCount)}`;
+    return withSkipNote(`Uploaded ${uploadedCount} of ${requestedFileCount} ${pluralizeFiles(requestedFileCount)}`, skipped);
   }
 
-  return `Uploaded ${uploadedCount} ${pluralizeFiles(uploadedCount)} successfully`;
+  return withSkipNote(`Uploaded ${uploadedCount} ${pluralizeFiles(uploadedCount)} successfully`, skipped);
 };
 
 const buildUploadFormData = (files: File[], targetPath: string) => {
@@ -98,7 +118,7 @@ const buildUploadFormData = (files: File[], targetPath: string) => {
 const uploadFormDataWithProgress = (
   projectId: string,
   formData: FormData,
-  onProgress: (progress: number) => void,
+  onProgress: (fraction: number) => void,
 ) =>
   new Promise<UploadResponse>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -115,9 +135,9 @@ const uploadFormDataWithProgress = (
         return;
       }
 
-      // Keep 100% for the server response so the UI can distinguish transfer
-      // completion from the final write/refresh step.
-      onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      // Transfer fraction (0..1); the batch runner keeps 100% for the final
+      // server response so the UI can tell transfer from the write/refresh step.
+      onProgress(event.total > 0 ? event.loaded / event.total : 0);
     };
 
     xhr.onload = () => {
@@ -145,7 +165,13 @@ const uploadFormDataWithProgress = (
   });
 
 // Helper function to read all files from a directory entry recursively
-const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry, basePath = ''): Promise<File[]> => {
+// Heavy/generated folders (node_modules, .venv, ...) are skipped without being
+// read, so their file count is unknown; only the folder path is recorded.
+const readAllDirectoryEntries = async (
+  directoryEntry: FileSystemDirectoryEntry,
+  basePath = '',
+  skipped: UploadSkipSummary = emptyUploadSkipSummary(),
+): Promise<File[]> => {
   const files: File[] = [];
 
   const reader = directoryEntry.createReader();
@@ -160,9 +186,6 @@ const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry,
     entries = entries.concat(batch);
   } while (batch.length > 0);
 
-  // Files to ignore (system files)
-  const ignoredFiles = ['.DS_Store', 'Thumbs.db', 'desktop.ini'];
-
   for (const entry of entries) {
     const entryPath = basePath ? `${basePath}/${entry.name}` : entry.name;
 
@@ -173,7 +196,8 @@ const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry,
       });
 
       // Skip ignored files
-      if (ignoredFiles.includes(file.name)) {
+      if (IGNORED_UPLOAD_FILES.has(file.name)) {
+        skipped.skippedFileCount += 1;
         continue;
       }
 
@@ -184,8 +208,12 @@ const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry,
       });
       files.push(fileWithPath);
     } else if (entry.isDirectory) {
+      if (isSkippedUploadDirectory(entry.name, splitUploadPath(entryPath).length - 1)) {
+        skipped.skippedDirectories.push(entryPath);
+        continue;
+      }
       const dirEntry = entry as FileSystemDirectoryEntry;
-      const subFiles = await readAllDirectoryEntries(dirEntry, entryPath);
+      const subFiles = await readAllDirectoryEntries(dirEntry, entryPath, skipped);
       files.push(...subFiles);
     }
   }
@@ -195,6 +223,7 @@ const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry,
 
 const collectDroppedFiles = async (dataTransfer: DataTransfer) => {
   const files: File[] = [];
+  const skipped = emptyUploadSkipSummary();
 
   // Use DataTransferItemList for folder support
   const { items } = dataTransfer;
@@ -220,11 +249,11 @@ const collectDroppedFiles = async (dataTransfer: DataTransfer) => {
         files.push(file);
       } else if (entry.isDirectory) {
         // Pass the directory name as basePath so files include the folder path
-        const dirFiles = await readAllDirectoryEntries(entry as FileSystemDirectoryEntry, entry.name);
+        const dirFiles = await readAllDirectoryEntries(entry as FileSystemDirectoryEntry, entry.name, skipped);
         files.push(...dirFiles);
       }
     }
-    return files;
+    return { files, skipped };
   }
 
   // Fallback for browsers that don't support webkitGetAsEntry
@@ -232,7 +261,7 @@ const collectDroppedFiles = async (dataTransfer: DataTransfer) => {
     files.push(file);
   }
 
-  return files;
+  return { files, skipped };
 };
 
 export const useFileTreeUpload = ({
@@ -268,7 +297,14 @@ export const useFileTreeUpload = ({
   useEffect(() => clearProgressTimer, [clearProgressTimer]);
 
   const setUploadError = useCallback(
-    (message: string, fileCount: number, targetPath = '', fileName?: string, progress = 0) => {
+    (
+      message: string,
+      fileCount: number,
+      targetPath = '',
+      fileName?: string,
+      progress = 0,
+      clearDelay = ERROR_PROGRESS_CLEAR_DELAY_MS,
+    ) => {
       setUploadProgress({
         status: 'error',
         progress,
@@ -277,14 +313,25 @@ export const useFileTreeUpload = ({
         targetPath,
         error: message,
       });
-      scheduleProgressClear(ERROR_PROGRESS_CLEAR_DELAY_MS);
+      scheduleProgressClear(clearDelay);
     },
     [scheduleProgressClear],
   );
 
   const uploadFiles = useCallback(
-    async (files: File[], targetPath = '') => {
+    async (inputFiles: File[], targetPath = '', preSkipped: UploadSkipSummary = emptyUploadSkipSummary()) => {
+      // Folder uploads (picker or drop) leave out node_modules, .venv, ... and OS junk.
+      const filtered = filterUploadFiles(inputFiles, getRelativePath);
+      const files = filtered.files;
+      const skipped = mergeUploadSkipSummaries(preSkipped, filtered.skipped);
+
       if (files.length === 0) {
+        const skipNote = formatUploadSkipSummary(skipped);
+        if (skipNote) {
+          const message = `Nothing to upload (${skipNote})`;
+          showToast(message, 'error');
+          setUploadError(message, 0, targetPath);
+        }
         setDropTarget(null);
         return;
       }
@@ -302,6 +349,7 @@ export const useFileTreeUpload = ({
       if (validationError) {
         showToast(validationError, 'error');
         setUploadError(validationError, files.length, targetPath, fileName);
+        setDropTarget(null);
         return;
       }
 
@@ -318,10 +366,23 @@ export const useFileTreeUpload = ({
       let latestProgress = 0;
 
       try {
-        const response = await uploadFormDataWithProgress(
-          selectedProject.projectId,
-          buildUploadFormData(files, targetPath),
-          (progress) => {
+        // The server accepts at most MAX_FILES_PER_UPLOAD_REQUEST files per
+        // request, so large selections go out as sequential batches.
+        const result = await runBatchedUpload({
+          files,
+          batchSize: MAX_FILES_PER_UPLOAD_REQUEST,
+          getSize: (file) => file.size,
+          uploadBatch: async (batch, _batchIndex, onBatchProgress) => {
+            const response = await uploadFormDataWithProgress(
+              selectedProject.projectId,
+              buildUploadFormData(batch, targetPath),
+              onBatchProgress,
+            );
+            return typeof response.uploadedCount === 'number'
+              ? response.uploadedCount
+              : response.files?.length ?? batch.length;
+          },
+          onProgress: (progress) => {
             latestProgress = progress;
             setUploadProgress((current) =>
               current && current.status === 'uploading'
@@ -329,23 +390,42 @@ export const useFileTreeUpload = ({
                 : current,
             );
           },
-        );
+        });
 
-        const uploadedCount =
-          typeof response.uploadedCount === 'number' ? response.uploadedCount : response.files?.length ?? files.length;
-        const requestedFileCount =
-          typeof response.requestedFileCount === 'number' ? response.requestedFileCount : files.length;
+        if (result.status === 'failed') {
+          const notUploadedPaths = result.notUploaded.map(getRelativePath);
+          console.error('Upload error:', result.error, 'Not uploaded:', notUploadedPaths);
+          const message =
+            result.batchCount > 1
+              ? `${result.error.message} Uploaded ${result.uploadedCount} of ${files.length} ${pluralizeFiles(files.length)}; ` +
+                `stopped at batch ${result.failedBatchIndex + 1} of ${result.batchCount}. ` +
+                `Not uploaded (${notUploadedPaths.length}): ${summarizeFileNames(notUploadedPaths)}`
+              : result.error.message;
+          showToast(message, 'error');
+          setUploadError(
+            message,
+            files.length,
+            targetPath,
+            fileName,
+            latestProgress,
+            result.uploadedCount > 0 ? PARTIAL_FAILURE_PROGRESS_CLEAR_DELAY_MS : ERROR_PROGRESS_CLEAR_DELAY_MS,
+          );
+          if (result.uploadedCount > 0) {
+            onRefresh();
+          }
+          return;
+        }
 
         setUploadProgress({
           status: 'complete',
           progress: 100,
-          fileCount: requestedFileCount,
-          uploadedCount,
+          fileCount: result.requestedCount,
+          uploadedCount: result.uploadedCount,
           fileName,
           targetPath,
         });
 
-        showToast(formatUploadSuccessMessage(uploadedCount, requestedFileCount), 'success');
+        showToast(formatUploadSuccessMessage(result.uploadedCount, result.requestedCount, skipped), 'success');
         scheduleProgressClear(COMPLETE_PROGRESS_CLEAR_DELAY_MS);
         onRefresh();
       } catch (err) {
@@ -408,8 +488,8 @@ export const useFileTreeUpload = ({
       const targetPath = dropTarget || '';
 
       try {
-        const files = await collectDroppedFiles(e.dataTransfer);
-        await uploadFiles(files, targetPath);
+        const { files, skipped } = await collectDroppedFiles(e.dataTransfer);
+        await uploadFiles(files, targetPath, skipped);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Could not read dropped files';
         console.error('Upload error:', err);

@@ -23,6 +23,7 @@ type FileTreeNodeProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onUpload?: (path: string) => void;
+  onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
   // Drag-and-drop upload targeting
   dropTarget?: string | null;
@@ -89,6 +90,7 @@ export default function FileTreeNode({
   onCopyPath,
   onDownload,
   onUpload,
+  onUploadFolder,
   onRefresh,
   dropTarget,
   onItemDragOver,
@@ -233,6 +235,7 @@ export default function FileTreeNode({
           onNewFile={onNewFile}
           onNewFolder={onNewFolder}
           onUpload={onUpload}
+          onUploadFolder={onUploadFolder}
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onRefresh={onRefresh}
@@ -268,6 +271,7 @@ export default function FileTreeNode({
               onCopyPath={onCopyPath}
               onDownload={onDownload}
               onUpload={onUpload}
+              onUploadFolder={onUploadFolder}
               onRefresh={onRefresh}
               dropTarget={dropTarget}
               onItemDragOver={onItemDragOver}

@@ -1,12 +1,13 @@
-import { useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import type { ChangeEvent } from 'react';
-import { ChevronDown, Eye, FileText, FolderPlus, List, Loader2, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
+import { ChevronDown, Eye, FileText, FolderPlus, FolderUp, List, Loader2, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import { MAX_FILE_UPLOAD_SIZE_LABEL } from '@/shared/constants';
 import type { FileTreeViewMode } from '@/shared/types';
+import { enableDirectoryPicker } from '@/modules/file-tree/utils/uploadBatching';
 
 type FileTreeHeaderProps = {
   viewMode: FileTreeViewMode;
@@ -17,6 +18,8 @@ type FileTreeHeaderProps = {
   onNewFile?: () => void;
   onNewFolder?: () => void;
   onUploadFiles?: (files: FileList) => void;
+  /** Upload a whole folder picked with the browser's directory picker (subfolders kept). */
+  onUploadFolder?: (files: FileList) => void;
   onRefresh?: () => void;
   onCollapseAll?: () => void;
   // Loading state
@@ -35,6 +38,7 @@ export default function FileTreeHeader({
   onNewFile,
   onNewFolder,
   onUploadFiles,
+  onUploadFolder,
   onRefresh,
   onCollapseAll,
   loading,
@@ -44,11 +48,24 @@ export default function FileTreeHeader({
 }: FileTreeHeaderProps) {
   const { t } = useTranslation();
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const setFolderInput = useCallback((input: HTMLInputElement | null) => {
+    folderInputRef.current = input;
+    enableDirectoryPicker(input);
+  }, []);
 
   const handleUploadInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     const { files } = event.target;
     if (files && files.length > 0) {
       onUploadFiles?.(files);
+    }
+    event.target.value = '';
+  };
+
+  const handleFolderInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const { files } = event.target;
+    if (files && files.length > 0) {
+      onUploadFolder?.(files);
     }
     event.target.value = '';
   };
@@ -101,6 +118,30 @@ export default function FileTreeHeader({
                     />
                   </span>
                 )}
+              </Button>
+            </>
+          )}
+          {onUploadFolder && (
+            <>
+              <input
+                ref={setFolderInput}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFolderInputChange}
+                tabIndex={-1}
+                aria-hidden="true"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => folderInputRef.current?.click()}
+                title={t('fileTree.uploadFolder', 'Upload folder (keeps subfolders; skips node_modules, .venv, ...)')}
+                aria-label={t('fileTree.uploadFolder', 'Upload folder (keeps subfolders; skips node_modules, .venv, ...)')}
+                disabled={operationLoading}
+              >
+                <FolderUp className="h-3.5 w-3.5" />
               </Button>
             </>
           )}
