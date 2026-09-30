@@ -124,14 +124,14 @@ function loadGmailSmtp(env: NodeJS.ProcessEnv, options: MailerOptions): Mailer |
  * gmail-app-password and does the SMTP send itself -- this app process never reads it, on disk or
  * in memory, at any point. Only the already-rendered subject/text (from buildEnrollmentCodeMail
  * or the fixed "slot taken" message below) crosses the socket. */
-function loadSecretdMailer(options: MailerOptions): Mailer {
+function loadSecretdMailer(env: NodeJS.ProcessEnv, options: MailerOptions): Mailer {
   const log = options.log ?? ((line: string) => console.log(line));
   log('[forja-device] mail transport forja-secretd ready');
   return {
     async send(message) {
       const domain = domainOf(message.to);
       try {
-        await sendMailViaSecretd(message.to, message.subject, message.text);
+        await sendMailViaSecretd(message.to, message.subject, message.text, env);
       } catch (error) {
         const logError = options.logError ?? ((line: string) => console.error(line));
         logError(`[forja-device] mail via forja-secretd FAILED to domain=${domain}: ${error instanceof Error ? error.message : String(error)}`);
@@ -144,7 +144,7 @@ function loadSecretdMailer(options: MailerOptions): Mailer {
 
 export function loadMailer(env: NodeJS.ProcessEnv = process.env, options: MailerOptions = {}): Mailer | null {
   const mode = (env.FORJA_MAIL ?? '').trim();
-  if (mode === 'secretd') return loadSecretdMailer(options);
+  if (mode === 'secretd') return loadSecretdMailer(env, options);
   if (mode === 'gmail-smtp') return loadGmailSmtp(env, options);
   if (mode === 'log') {
     if (env.NODE_ENV === 'production') {

@@ -70,16 +70,16 @@ export function createCloudflareSigner(options: CloudflareSignerOptions): Certif
  * cloudflare-cert-token and makes the Cloudflare API calls itself -- this app process never reads
  * that token, on disk or in memory, at any point; it only ever sends a CSR (issue) or a cert id
  * (revoke) and gets back the same result shape as the direct signer above. */
-function loadSecretdSigner(): CertificateSigner {
+function loadSecretdSigner(env: NodeJS.ProcessEnv): CertificateSigner {
   return {
-    issue: (csrPem) => certIssueViaSecretd(csrPem),
-    revoke: (cfCertId) => certRevokeViaSecretd(cfCertId),
+    issue: (csrPem) => certIssueViaSecretd(csrPem, env),
+    revoke: (cfCertId) => certRevokeViaSecretd(cfCertId, env),
   };
 }
 
 /** Signer from the environment, or null when not configured (enrolment then answers 503). */
 export function loadCloudflareSigner(env: NodeJS.ProcessEnv = process.env): CertificateSigner | null {
-  if (secretdEnabled(env)) return loadSecretdSigner();
+  if (secretdEnabled(env)) return loadSecretdSigner(env);
   const zoneId = (env.FORJA_CF_ZONE_ID ?? '').trim();
   const tokenFile = (env.FORJA_CF_CERT_TOKEN_FILE ?? '').trim();
   if (!zoneId || !tokenFile) return null;
