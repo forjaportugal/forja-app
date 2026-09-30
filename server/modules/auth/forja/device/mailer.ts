@@ -11,6 +11,11 @@
  *   tests and development).
  * - anything else / unset: no mailer (503 MAIL_NOT_CONFIGURED).
  *
+ * When FORJA_SECRETD=1, FORJA_MAIL must be `secretd`. Any other value (including a
+ * misconfigured drop-in still set to `gmail-smtp`) is refused at startup -- no mailer, no read of
+ * FORJA_MAIL_PASSWORD_FILE -- rather than silently falling back to a direct file read the app must
+ * never do again post-migration (system-state-migration.md §7 override 1).
+ *
  * The gmail-smtp transport never logs the message body, the code or the
  * password: only success/failure and the recipient's domain.
  */
@@ -18,7 +23,7 @@ import { readFileSync } from 'node:fs';
 
 import nodemailer from 'nodemailer';
 
-import { sendMailViaSecretd } from './secretd-client.js';
+import { secretdEnabled, sendMailViaSecretd } from './secretd-client.js';
 
 export type MailMessage = { to: string; subject: string; text: string; html?: string };
 
@@ -144,6 +149,18 @@ function loadSecretdMailer(env: NodeJS.ProcessEnv, options: MailerOptions): Mail
 
 export function loadMailer(env: NodeJS.ProcessEnv = process.env, options: MailerOptions = {}): Mailer | null {
   const mode = (env.FORJA_MAIL ?? '').trim();
+  // Fail closed (startup): once forja-secretd is the mandated path, any other transport --
+  // including a misconfigured drop-in that left FORJA_MAIL=gmail-smtp -- is refused rather than
+  // silently falling back to reading the gmail-app-password file directly, which the app must
+  // never do again (plano/trabalho/system-state-migration.md §7 override 1).
+  if (secretdEnabled(env) && mode !== 'secretd') {
+    const logError = options.logError ?? ((line: string) => console.error(line));
+    logError(
+      `[forja-device] FORJA_SECRETD=1 requires FORJA_MAIL=secretd (got FORJA_MAIL=${mode || '(unset)'}); `
+      + 'mail disabled, enrolment answers 503 (never reads the gmail-app-password file)',
+    );
+    return null;
+  }
   if (mode === 'secretd') return loadSecretdMailer(env, options);
   if (mode === 'gmail-smtp') return loadGmailSmtp(env, options);
   if (mode === 'log') {

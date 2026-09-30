@@ -154,6 +154,30 @@ test('gmail-smtp: missing, unreadable or empty password file → no mailer, clea
   }
 });
 
+test('FORJA_SECRETD=1 refuses any transport other than secretd, and never reads the password file', () => {
+  const h = harness();
+  const logs: string[] = [];
+  const mailer = loadMailer(
+    { FORJA_SECRETD: '1', FORJA_MAIL: 'gmail-smtp' },
+    { ...h.mailerOptions, logError: (l) => logs.push(l) },
+  );
+  assert.equal(mailer, null);
+  assert.equal(h.readPaths.length, 0, 'must never read the gmail app password file');
+  assert.ok(logs.some((line) => /FORJA_SECRETD=1 requires FORJA_MAIL=secretd/.test(line) && /gmail-smtp/.test(line)), logs.join('\n'));
+
+  // Unset/unknown FORJA_MAIL under FORJA_SECRETD=1 is refused the same way.
+  const unsetLogs: string[] = [];
+  assert.equal(loadMailer({ FORJA_SECRETD: '1' }, { ...h.mailerOptions, logError: (l) => unsetLogs.push(l) }), null);
+  assert.ok(unsetLogs.some((line) => /\(unset\)/.test(line)));
+
+  // FORJA_SECRETD=1 with FORJA_MAIL=secretd is unaffected (no fake daemon here, so it only checks
+  // that the gate does not fire -- loadSecretdMailer itself is covered in secretd-client.test.ts).
+  const secretdLogs: string[] = [];
+  const secretdMailer = loadMailer({ FORJA_SECRETD: '1', FORJA_MAIL: 'secretd' }, { logError: (l) => secretdLogs.push(l), log: () => undefined });
+  assert.ok(secretdMailer);
+  assert.ok(!secretdLogs.some((line) => /requires FORJA_MAIL=secretd/.test(line)));
+});
+
 test('enrolment with gmail-smtp: missing password file → 503 MAIL_NOT_CONFIGURED; SMTP failure → 503 MAIL_FAILED without leaking the code', async () => {
   await withTempDatabase(async () => {
     const service = (mailer: ReturnType<typeof loadMailer>, log: (line: string) => void = () => undefined) => createEnrollmentService({

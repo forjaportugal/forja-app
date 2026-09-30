@@ -68,7 +68,11 @@ function callSecretd(env: NodeJS.ProcessEnv, request: Record<string, unknown>, t
 export function getEdgeSecretSync(env: NodeJS.ProcessEnv = process.env): string {
   const helper = (env.FORJA_SECRETD_EDGE_HELPER ?? '').trim() || DEFAULT_EDGE_SECRET_HELPER;
   try {
-    return execFileSync('python3', [helper], { timeout: 5000, encoding: 'utf8' }).trim();
+    // Absolute interpreter path with -I (isolated mode: ignores PYTHONPATH, user site-packages,
+    // and does not prepend the script's directory to sys.path) so this never resolves `python3`
+    // through the app's own PATH (which starts with a forja-writable directory) or honours the
+    // helper's own shebang -- both would let an agent running as forja substitute a fake helper.
+    return execFileSync('/usr/bin/python3', ['-I', helper], { timeout: 5000, encoding: 'utf8' }).trim();
   } catch (error) {
     console.error('[forja-secretd] get-edge-secret failed:', error instanceof Error ? error.message : String(error));
     return '';

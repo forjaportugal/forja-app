@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -128,6 +128,46 @@ test('getEdgeSecretSync: runs the configured helper and trims its stdout', () =>
     chmodSync(helper, 0o755);
     const secret = getEdgeSecretSync({ FORJA_SECRETD_EDGE_HELPER: helper });
     assert.equal(secret, 'edge-secret-value');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getEdgeSecretSync: runs the helper via /usr/bin/python3 -I, never a bare "python3" resolved through PATH', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'forja-edge-helper-isolated-'));
+  try {
+    const helper = path.join(dir, 'get-edge-secret.py');
+    // No shebang and not executable: if the implementation ever regressed to
+    // execFileSync('python3', [helper]) (PATH lookup, ignoring -I), this would still work by
+    // accident on some systems -- so the real regression guard is the PATH-poisoning case below.
+    writeFileSync(helper, 'import sys; print("value-from-absolute-python3")\n');
+    const secret = getEdgeSecretSync({ FORJA_SECRETD_EDGE_HELPER: helper });
+    assert.equal(secret, 'value-from-absolute-python3');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getEdgeSecretSync: a forja-writable PATH with a fake "python3" is never consulted', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'forja-edge-helper-pathpoison-'));
+  try {
+    const helper = path.join(dir, 'get-edge-secret.py');
+    writeFileSync(helper, 'print("real-value")\n');
+
+    // Plant a fake python3 ahead of the real one on PATH -- this is exactly the attack A1 closes
+    // (an agent running as forja writing to a forja-writable directory on the app's own PATH).
+    const fakeBin = path.join(dir, 'bin');
+    mkdirSync(fakeBin);
+    const fakePython3 = path.join(fakeBin, 'python3');
+    writeFileSync(fakePython3, '#!/bin/sh\necho "PWNED"\n');
+    chmodSync(fakePython3, 0o755);
+
+    const secret = getEdgeSecretSync({
+      FORJA_SECRETD_EDGE_HELPER: helper,
+      PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+    });
+    assert.equal(secret, 'real-value');
+    assert.notEqual(secret, 'PWNED');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
