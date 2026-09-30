@@ -24,6 +24,7 @@ import type { IncomingHttpHeaders } from 'node:http';
 import { parseEmailList, type AccessResult } from '../cf-access.js';
 
 import type { DeviceRepository } from './device.repository.js';
+import { getEdgeSecretSync, secretdEnabled } from './secretd-client.js';
 
 export const EDGE_AUTH_HEADER = 'x-forja-edge-auth';
 export const CLIENT_CERT_SHA256_HEADER = 'x-forja-client-cert-sha256';
@@ -48,10 +49,22 @@ function readSecret(env: NodeJS.ProcessEnv, name: string): string {
   return (env[name] ?? '').trim();
 }
 
+/**
+ * forja-secretd (system-state-migration.md §7 override 1, 2026-09-30, dated exception
+ * 2026-10-04): when FORJA_SECRETD=1, the edge secret is fetched ONCE here, at process startup,
+ * from the daemon that now exclusively owns the file -- forja-edge-secret is never again a file
+ * this app (or the `forja` user running it) can read directly. This is a v1 limitation, not the
+ * end state: the ideal is a per-request verify-edge-header(value) call so the raw secret never
+ * sits in this process's memory at all, but the edge check runs on the hot path of every
+ * device-mode request and WebSocket upgrade (device-gate.ts's installUpgradeGate, a synchronous
+ * server.emit() interception) -- converting that specific path to async IPC per request is a
+ * materially larger, riskier change than fits this maintenance window untested. Tracked with a
+ * 2026-10-04 deadline (DECISIONS.md).
+ */
 export function loadDeviceModeConfig(env: NodeJS.ProcessEnv = process.env): DeviceModeConfig {
   return {
     allowedEmails: parseEmailList(env.FORJA_ALLOWED_EMAILS),
-    edgeSecret: readSecret(env, 'FORJA_EDGE_SECRET'),
+    edgeSecret: secretdEnabled(env) ? getEdgeSecretSync(env) : readSecret(env, 'FORJA_EDGE_SECRET'),
   };
 }
 

@@ -8,6 +8,8 @@
  */
 import { readFileSync } from 'node:fs';
 
+import { certIssueViaSecretd, certRevokeViaSecretd, secretdEnabled } from './secretd-client.js';
+
 export type IssuedCertificate = { cfCertId: string; certificatePem: string };
 
 export type CertificateSigner = {
@@ -64,8 +66,20 @@ export function createCloudflareSigner(options: CloudflareSignerOptions): Certif
   };
 }
 
+/** forja-secretd (system-state-migration.md §7 override 1, 2026-09-30): the daemon holds
+ * cloudflare-cert-token and makes the Cloudflare API calls itself -- this app process never reads
+ * that token, on disk or in memory, at any point; it only ever sends a CSR (issue) or a cert id
+ * (revoke) and gets back the same result shape as the direct signer above. */
+function loadSecretdSigner(): CertificateSigner {
+  return {
+    issue: (csrPem) => certIssueViaSecretd(csrPem),
+    revoke: (cfCertId) => certRevokeViaSecretd(cfCertId),
+  };
+}
+
 /** Signer from the environment, or null when not configured (enrolment then answers 503). */
 export function loadCloudflareSigner(env: NodeJS.ProcessEnv = process.env): CertificateSigner | null {
+  if (secretdEnabled(env)) return loadSecretdSigner();
   const zoneId = (env.FORJA_CF_ZONE_ID ?? '').trim();
   const tokenFile = (env.FORJA_CF_CERT_TOKEN_FILE ?? '').trim();
   if (!zoneId || !tokenFile) return null;
